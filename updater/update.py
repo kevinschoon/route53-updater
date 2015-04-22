@@ -6,33 +6,40 @@ import logging
 from boto import ec2, route53
 
 
-class Ec2Instances:
+class Ec2Service:
     def __init__(self, name_match, aws_region='us-east-1'):
-        self.conn = ec2.connect_to_region(region_name=aws_region)
+        self.aws_region = aws_region
         self.match = name_match
-        self.instances = list()
+        self.connection = None
 
-    def refresh(self):
-        self.instances = [x for x in self.conn.get_only_instances(filters={'tag:Name': self.match})]
+    def connect(self):
+        self.connection = ec2.connect_to_region(self.aws_region)
+
+    def get_instances(self):
+        return [x for x in self.connection.get_only_instances(filters={'tag:Name': self.match})]
 
 
-class Route53Domains:
+class Route53Service:
     def __init__(self, aws_region='us-east-1'):
-        self.conn = route53.connect_to_region(region_name=aws_region)
+        self.aws_region = aws_region
+        self.connection = None
         self.change_set = list()
 
+    def connect(self):
+        self.connection = route53.connect_to_region(region_name=self.aws_region)
+
     def get_zone(self, zone_name):
-        return self.conn.get_zone(zone_name)
+        return self.connection.get_zone(zone_name)
 
     def get_zones_for_domain(self, domain, ip_address):
         ip = ip_address.split('.')
         ptr_name = '.'.join([ip[1], ip[0]]) + '.in-addr.arpa.'
 
-        private_zone = [z for z in self.conn.get_zones()
+        private_zone = [z for z in self.connection.get_zones()
                         if all([z.name == domain, z.config['PrivateZone'] == 'true'])]
-        public_zone = [z for z in self.conn.get_zones()
+        public_zone = [z for z in self.connection.get_zones()
                        if all([z.name == domain, z.config['PrivateZone'] == 'false'])]
-        reverse_zone = [z for z in self.conn.get_zones() if z.name == ptr_name]
+        reverse_zone = [z for z in self.connection.get_zones() if z.name == ptr_name]
 
         return private_zone[0], public_zone[0], reverse_zone[0]
 
@@ -41,7 +48,7 @@ class Route53Domains:
         self.change_set.append(change_set)
 
     def get_zone_id(self, zone_name):
-        return self.conn.get_zone(zone_name).id
+        return self.connection.get_zone(zone_name).id
 
     def commit_changes(self):
         for change_set in self.change_set:
@@ -63,11 +70,15 @@ class Route53Domains:
 
 
 class Route53Updater:
-    def __init__(self, name_match, cycle=15, daemon_mode=False):
-        self.ec2 = Ec2Instances(name_match=name_match)
-        self.route_53 = Route53Domains(aws_region='us-east-1')
-        self.cycle = cycle
-        self.daemon_mode = daemon_mode
+    def __init__(self, name_match='mesos-*', aws_region='us-east-1'):
+        self.match = name_match
+        self.aws_region = aws_region
+        self.ec2 = Ec2Service(name_match=name_match, aws_region=aws_region)
+        self.route_53 = Route53Service(aws_region=aws_region)
+
+    def refresh(self):
+        self.ec2.connect()
+        self.route_53.connect()
 
     @staticmethod
     def get_fqdn(instance):
@@ -81,11 +92,16 @@ class Route53Updater:
     def get_domain(instance):
         return '.'.join(instance.tags['Name'].split('.')[1:]) + '.'
 
-    def run(self, loop):
+    def run(self):
 
-        self.ec2.refresh()
+        self.refresh()
 
-        for instance in self.ec2.instances:
+        instances = self.ec2.get_instances()
+
+        if not instances:
+            logging.warning('Could not find any EC2 instances matching: {}'.format(self.match))
+
+        for instance in instances:
 
             fqdn = self.get_fqdn(instance)
             domain = self.get_domain(instance)
@@ -108,8 +124,3 @@ class Route53Updater:
             """
 
         self.route_53.commit_changes()
-
-        if self.daemon_mode:
-            loop.call_later(int(self.cycle), self.run, loop)
-        else:
-            loop.stop()

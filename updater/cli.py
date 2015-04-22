@@ -1,25 +1,37 @@
+"""
+CLI Interface to Route53Updater
+"""
+
 import argparse
 import logging
 import asyncio
 import os
 
-from updater.updater import Route53Updater
+from updater.status import StatusWrapper
+from updater.update import Route53Updater
 
 FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 logging.getLogger(__name__)
 
-UPDATER_LOGGING_LEVEL = os.getenv('LOGGING_LEVEL', 'INFO')
-UPDATER_NAME_MATCH = os.getenv('NAME_MATCH', '')
-UPDATER_CYCLE = os.getenv('CYCLE', 15)
+UPDATER_LOGGING_LEVEL = os.getenv('UPDATER_LOGGING_LEVEL', 'INFO')
+UPDATER_NAME_MATCH = os.getenv('UPDATER_NAME_MATCH', '')
+UPDATER_CYCLE = os.getenv('UPDATER_CYCLE', 15)
+UPDATER_REGION = os.getenv('UPDATER_REGION', 'us-east-1')
 
 
 def run_event_loop(args):
 
-    loop = asyncio.get_event_loop()
-    updater = Route53Updater(name_match=args.match, cycle=args.cycle, daemon_mode=args.daemon)
-    loop.call_soon(updater.run, loop)
+    updater = Route53Updater(args.match, args.region)
 
-    loop.run_forever()
+    loop = asyncio.get_event_loop()
+    s = StatusWrapper(loop, updater, cycle=args.cycle)
+    loop.call_soon(s.schedule_check)
+    loop.run_until_complete(s.init())
+
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
 
 
 def main():
@@ -28,7 +40,7 @@ def main():
 
     parser.add_argument('-m', '--match', default=UPDATER_NAME_MATCH)
     parser.add_argument('-c', '--cycle', default=UPDATER_CYCLE)
-    parser.add_argument('-d', '--daemon', action='store_true', default=False)
+    parser.add_argument('-r', '--region', default=UPDATER_REGION)
     args = parser.parse_args()
 
     logging.basicConfig(level=args.level)
