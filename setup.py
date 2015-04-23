@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='53Updater',
-    version='0.0.2',
+    version='0.0.3',
     packages=find_packages(),
     package_dir={'53updater': 'updater'},
     entry_points={'console_scripts': ['53Updater = updater.cli:main']},
